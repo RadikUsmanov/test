@@ -1,0 +1,563 @@
+<!DOCTYPE HTML>
+<html>
+    <head>
+        <link rel="stylesheet" href="webix.css" type="text/css"> 
+        <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/font-awesome/4.5.0/css/font-awesome.min.css">
+        <script src="webix.js" type="text/javascript"></script>
+        <meta charset="UTF-8"/>
+        <title>Web GDB</title>
+        <style>
+        pre {
+            font-size:10px; margin:0px; padding-top:1px; padding-bottom:1px; 
+        }
+        td {
+            font-size:10px; padding:0px;
+        }
+        .myStyle {
+            font-size:12px; padding:1px; margin:0px; font-family: Courier New, Courier, monospace;
+        }
+        .line_number {
+            padding-left:10px; padding-right:10px;
+        }
+        table {
+            border-spacing:0px;
+            margin:0px;
+        }
+        .c_line_number {
+            width:60px;
+            padding:1px;
+        }
+        </style>
+    </head>
+    <body>
+        <table border="0" cellspacing="0" cellpadding="0" width="1000">
+            <tr><td style="background-color:#3498DB; margin:0px;"><div id="top_toolbar"></div></td></tr>
+            <tr>
+                <td><table border="0" cellspacing="0" cellpadding="0" width="100%">
+                    <tr>
+                        <td height="400">
+                            <table id="program_file" border="0" cellspacing="0" cellpadding="0" width="100%">
+                                <tr height="350" valign="top"><td id="program_form"></td></tr>
+                                <tr height="50"><td id="program_toolbar"></td></tr>
+                            </table>
+
+                            <table height="400" id="list_c" border="0" cellspacing="0" cellpadding="0" width="100%" style="display:none;">
+                                <tr height="300" valign="top">
+                                    <td style="background-color:yellow;"><table border="0" cellspacing="0" cellpadding="0" width="900"
+                                        style="font-size:10px; padding:5px; line-height:10px;" id="table_c">
+                                    </table></td><td width="100" id="left_menu_c"></td>
+                                </tr>
+                                <tr><td id="list_c_toolbar" colspan="2" height="100" style="padding:0px; margin:0px;"></td></tr>
+                            </table>
+                            
+                            <div id="list_asm" style="background-color:orange;margin:0px;"><pre id="list_asm_pre"
+                            style="display:none; font-size:10px; width:0px; height:400px;">
+                            </pre></div><div id="list_breaks" style="display:none; height:400px; padding:0px; margin:0px;
+                            background-color:#F9A1FF;"><pre id="list_breaks_pre"
+                            style="font-size:10px; width:0px; height:390px; padding:5px; margin:0px;">
+                            </pre></div>
+                        </td>
+                    </tr>
+                </table></td>
+            </tr>
+        </table>
+        <script type="text/javascript" charset="UTF-8">
+        var quiet_out_mode = false;
+        var quiet_err_mode = false;
+        var current_pc = null;
+        var files = [];
+        var id_page = [
+            "program_file",
+            "list_c",
+            "list_asm",
+            "list_breaks"
+        ];
+        
+        function select_page(n) {
+            var item;
+            id_page.forEach(function(item, i, arr) {
+                item = document.getElementById(id_page[i]);
+                item.style.width = "0px";
+                item.style.display = "none";
+            });
+            item = document.getElementById(id_page[n]);
+            item.style.width = "1000px";
+            item.style.display = "inline-block";
+        }
+        
+        webix.ui({
+            view: "toolbar",
+            container: "list_c_toolbar",
+            height:100,
+            cols:[
+                {
+                    borderless:true,
+                    margin:4,
+                    width:140,
+                    rows:[
+                        {
+                            cols:[
+                                { view:"icon", icon:"chevron-left", click:"list_prev" },
+                                { view:"text", id:"c_line_id", width:55, attributes:{ style:'width:50px; font-size:12px; font-family: Courier New, Courier, monospace;' } },
+                                { view:"icon", icon:"chevron-right", click:"list_next" },
+                            ]
+                        },
+                        {}
+                    ]
+                },
+                {
+                    width:235
+                },
+                {
+                    borderless:true, 
+                    margin:4, 
+                    width:605,
+                    rows:[
+                        {
+                            cols:[
+                                { view:"text", id:"list_function_id", attributes:{ style:'width:565px; font-size:12px; font-family: Courier New, Courier, monospace;' } },
+                                { view:"icon", icon:"search", click:"list_function" },
+                            ]
+                        },
+                        {
+                            view:"list",
+                            id:"select_file_id",
+                            select:"row",
+                            navigate:true,
+                            type:{
+                                width:600,
+                                templateStart:"<div class='myStyle' id='source_#id#' onclick='click_source(#id#)'>",
+                                template:"#file#",
+                                templateEnd:"</div>"
+                            },
+                            data:[],
+                        },
+                    ]
+                }
+            ]
+        });
+        $$("list_function_id").attachEvent("onKeyPress", function(code, e){
+            if(code == 13) list_function();
+        });
+
+        webix.ui({
+            view: "toolbar",
+            container: "left_menu_c",
+            width:100,
+            height:300,
+            css:"myToolbar",
+            rows:[
+                { view:"button", id:"run_c_button", value:"Run", width:90, click:"run_program", hidden:false },
+                { view:"button", id:"step_c_button", value:"Step", width:90, click:"step_program", hidden:true },
+                { view:"button", id:"next_c_button", value:"Next", width:90, click:"next_program", hidden:true },
+                { view:"button", id:"continue_c_button", value:"Continue", width:90, click:"continue_program", hidden:true },
+                {}
+            ]
+        });
+
+        webix.ui({
+            view: "toolbar",
+            container: "program_toolbar",
+            id:"program_toolbar_id",
+            cols:[
+                { view:"button", value:"Load file to GDB", width:160, click:"load_file" },
+                { view:"button", value:"Unload", id:"unload_file_button", width:160, hidden:true, click:"unload_file" },
+                {},
+                { view:"button", value:"Stop server", id:"stop_server_button", width:160, click:"quit_server" },
+            ]
+        });
+        webix.ui({
+            view: "toolbar",
+            container: "top_toolbar",
+            cols:[
+                { view:"button", value:"Program file", id:"menu_program_item", width:140, click:"select_program_page" },
+                { view:"button", value:"C/C++", id:"menu_c_item", width:140, hidden:true, click:"select_c_page" },
+                { view:"button", value:"Assembler", id:"menu_asm_item", width:140, hidden:true, click:"select_asm_page" },
+                { view:"button", value:"Breakpoints", id:"menu_break_item", width:140, hidden:true, click:"select_break_page" },
+                {}
+            ]
+        });
+        webix.ui({
+            view:"form",
+            id:"program_form",
+            container:"program_form",
+            borderless:true,
+            elements:[
+                { view:"text", id:"filename", name:"filename", placeholder:"Enter path to program file here", width: 400, required:true },
+                { view:"text", id:"cmd", name:"cmd", value:"file", required:true, hidden:true }
+            ]
+        });
+        $$("filename").attachEvent("onKeyPress", function(code, e){
+            if(code == 13) load_file();
+        });
+        $$("c_line_id").attachEvent("onKeyPress", function(code, e){
+            if(code!=13 && code!=9) return;
+            get_final_id();
+            var id = parseInt($$("c_line_id").getValue());
+            if(id < 1) id = 1;
+            if(id > final_id) id = final_id;
+            var resp = list_c_code(id + ',');
+            show_c_code(resp);
+        });
+        var handleMouseOver = function() {
+            this.style.backgroundColor = "#3498DB";
+        }
+        var handleMouseOut = function() {
+            this.style.backgroundColor = "yellow";
+        }
+        $$("select_file_id").attachEvent("onKeyPress", function(code, e) {
+            var id = $$("select_file_id").getSelectedId();
+            var cnt = $$("select_file_id").count();
+            if(code == 33 && id > 1)        { id = id > 3 ? id - 3 : 1; }
+            else if(code == 34 && id < cnt) { id = id < cnt - 3 ? id + 3 : cnt; }
+            else if(code == 35 && id < cnt) { id = cnt; }
+            else if(code == 36 && id > 1)   { id = 1; }
+            else if(code == 37 && id > 1)   { id = id > 3 ? id - 3 : 1; }
+            else if(code == 38 && id > 1)   { id--; }
+            else if(code == 39 && id < cnt) { id = id < cnt - 3 ? id + 3 : cnt; }
+            else if(code == 40 && id < cnt) { id++; }
+            else { return false; }
+            click_source(id);
+            return false;
+        });
+        function click_source(id) {
+            select_source(id);
+            var file = $$("select_file_id").getItem(id).file;
+            var resp = list_c_code("'" + file + "':1");
+            show_c_code(resp);
+        }
+        function select_source(id) {
+            $$("select_file_id").select(id);
+            for(i = 1; i <= $$("select_file_id").count(); i++) {
+                var item = document.getElementById('source_' + i);
+                if(i == id) {
+                    item.style.backgroundColor = '#27AE60';
+                    item.style.color = '#FFF';
+                } else {
+                    item.style.backgroundColor = 'white';
+                    item.style.color = '#666';
+                }
+            }
+            $$("select_file_id").scrollTo(0, Math.max(id*16 - 32, 0));
+        }
+        function read_breaks() {
+            quiet_out_mode = true;
+            var resp = command({cmd:'info', arg:'breakpoints'});
+            if(typeof(resp[0]) === 'undefined') return;
+            var breaks = resp[0].out;
+            if (breaks.length == 0)
+                $$("menu_break_item").hide();
+            else
+                $$("menu_break_item").show();
+            return breaks;
+        }
+        function get_breaks() {
+            var breaks = read_breaks();
+            var data = '';
+            if (breaks.length == 0)
+                select_program_page();
+            else {
+                breaks.forEach(function(item, i, arr) {
+                    if ( item.hasOwnProperty("addr"))
+                        data += '<div onclick="clear_break(\'' + item.addr + '\')" style="display:inline-block;"'
+                        + ' onmouseover="this.style.backgroundColor=\'#f00\'"'
+                        + ' onmouseout="this.style.backgroundColor=\'#F9A1FF\'">delete</div> | ' + item.line;
+                    else
+                        data += '         ' + item.line;
+                });
+                document.getElementById("list_breaks_pre").innerHTML = data;
+            }
+        }
+        function clear_break(addr) {
+            var resp = command({cmd:'clear', point:addr});
+            get_breaks();
+        }
+        function get_sources() {
+            $$("select_file_id").clearAll();
+            document.getElementById("table_c").innerHTML = '';
+            quiet_out_mode = true;
+            var resp = command({cmd:'info', arg:'sources'});
+            if(typeof(resp[0]) === 'undefined') return;
+            var elems = resp[0].out;
+            var n = 1;
+            for (var i = 0; i < elems.length; i++) {
+                var elem = elems[i];
+                if(elem.match(/^Source files for which/)) continue;
+                var arr = elem.split(',');
+                for (var j = 0; j < arr.length; j++) {
+                    var nfile = arr[j].replace(/^\s+/, "").replace(/\s+$/, "");
+                    if(!nfile) continue;
+                    if(nfile.match(/^\s+$/)) continue;
+                    if(nfile.match(/</)) continue;
+                    $$("select_file_id").add({id:n, file:nfile});
+                    n++;
+                }
+            }
+        }
+        function select_program_page() {
+            select_page(0);
+        }
+        function select_c_page() {
+            select_page(1);
+        }
+        function select_asm_page() {
+            select_page(2);
+        }
+        function select_break_page() {
+            select_page(3);
+            get_breaks();
+        }
+        function load_file() {
+            var obj = $$("program_form");
+            if(!obj.validate()) {
+                webix.message({type:"error", text:"Fill the form first."});
+                return respond;
+            }
+            var resp = command(obj.getValues());
+            if(was_error(resp)) {
+                $$("menu_c_item").hide();
+                $$("menu_asm_item").hide();
+            } else {
+                $$("unload_file_button").show();
+                $$("menu_c_item").show();
+                get_sources();
+                $$("list_function_id").$setValue("main");
+                list_function();
+            }
+        }
+        function unload_file() {
+            quiet_out_mode = true;
+            command({cmd:'file', filename:''});
+            clean_gui();
+        }
+        function run_program() {
+            command({cmd:'run'});
+            check_frame();
+        }
+        function step_program() {
+            command({cmd:'step'});
+            check_frame();
+        }
+        function next_program() {
+            command({cmd:'next'});
+            check_frame();
+        }
+        function continue_program() {
+            command({cmd:'continue'});
+            check_frame();
+        }
+        function check_frame() {
+            quiet_out_mode = true;
+            quiet_err_mode = true;
+            var resp = command({cmd:'frame'});
+            if ( resp[0].hasOwnProperty('err') ) {
+                var msg = resp[0].err.join('');
+                if( msg.match(/No stack/) ) {
+                    webix.message('Finish run');
+                    $$("run_c_button").show();
+                    $$("step_c_button").hide();
+                    $$("next_c_button").hide();
+                    $$("continue_c_button").hide();
+                    current_pc = null;
+                    resp = list_c_code('main');
+                } 
+                else webix.message( {type:"error", text:msg} );
+            }
+            else {
+                if ( resp[0].hasOwnProperty('out') ) {
+                    var msg = resp[0].out[0];
+                    var ptr;
+                    var resp;
+                    if(ptr = msg.match(/#.* at ([^\s]+)/)) {
+                        current_pc = ptr[1];
+                        resp = list_c_code(current_pc);
+                    } else {
+                        current_pc = null;
+                        resp = list_c_code('main');
+                    }
+                    show_c_code(resp);
+                }
+                $$("run_c_button").hide();
+                $$("step_c_button").show();
+                $$("next_c_button").show();
+                $$("continue_c_button").show();
+            }
+        }
+        function quit_server() {
+            quiet_out_mode = true;
+            clean_gui();
+            command({cmd:'quit'});
+        }
+        function clean_gui() {
+            $$("menu_asm_item").hide();
+            clean_file_gui();
+            clean_c_gui();
+            clean_break_gui();
+        }
+        
+        function clean_file_gui() {
+            $$("filename").setValue("");
+            $$("unload_file_button").hide();
+        }
+        function clean_c_gui() {
+            $$("menu_c_item").hide();
+            $$("select_file_id").clearAll();
+            $$("run_c_button").show();
+            $$("step_c_button").hide();
+            $$("next_c_button").hide();
+            $$("continue_c_button").hide();
+        }
+      
+        function clean_break_gui() {
+            $$("menu_break_item").hide();
+            command({cmd:'delete'});
+        }
+
+        var first_id, last_id, prev_id, next_id, final_id;
+        function list_function() {
+            var name = $$("list_function_id").$getValue();
+            if(!name) return;
+            var resp = list_c_code(name);
+
+            quiet_out_mode = true;
+            var respA = command({cmd:'info', arg:'source'});
+
+            respA[0].out.forEach(function(item, i, arr) {
+                var arr = item.match(/Located in (.*)/);
+                if (arr) {
+                    var res = $$("select_file_id").find(function(obj){
+                        return obj.file == arr[1];
+                    });
+                    select_source(res[0].id);
+                }
+            });
+
+            show_c_code(resp);
+        }
+        function list_next() {
+            list_cmd(next_id);
+        }
+        function list_prev() {
+            list_cmd(prev_id);
+        }
+        function get_final_id() {
+            quiet_out_mode = true;
+            var resp = command({cmd:'info', arg:'source'});
+            resp[0].out.forEach(function(item, i, arr) {
+                var arr = item.match(/Contains (\d+) lines./);
+                if (arr) final_id = arr[1];
+            });
+        }
+        function list_cmd(nline) {
+            get_final_id();
+            if (nline + 19 > final_id) {
+                first_id = final_id - (final_id - 1) % 20;
+                last_id = final_id;
+            } else {
+                first_id = nline;
+                last_id = nline + 19;
+            }
+            var resp = list_c_code(first_id + ',' + last_id);
+            show_c_code(resp);
+        }
+        function list_c_code(arg) {
+            quiet_out_mode = true;
+            return command({cmd:'list', arg:arg});
+        }
+        function show_c_code(resp) {
+            if(resp.length == 0) return;
+            var obj = resp[0];
+            if(obj.hasOwnProperty('code')) {
+                var body = '';
+
+                var filename = $$("select_file_id").getSelectedItem().file.replace(/.*\//, '');
+                var breaks = read_breaks();
+
+                obj.code.forEach(function(item, i, arr) {
+                    var id = item.id;
+                    var addr = filename + ':' + id;
+                    
+                    var re = new RegExp(current_pc + '$');
+                    var pc = (current_pc !== null && addr.match(re)) ? '>' : ' ';
+                    
+                    breaks.forEach(function(item, i, arr){
+                        if(item.addr == addr) pc += 'b';
+                    });
+                    
+                    var line = item.line.replace(/</g, '&lt;');
+                    body += '<tr>'
+                         + '<td class="c_line_number" align="right" onclick="set_break(' + id + ')">'
+                         + '<pre class="line_number">' + id + '</pre></td>'
+                         + '<td align="left"><pre>' + pc + line + '</pre></td>'
+                         + '</tr>';
+                });
+                document.getElementById("table_c").innerHTML = body;
+                var classname = document.getElementsByClassName("c_line_number");
+                for(var i=0; i<classname.length; i++){
+                    classname[i].onmouseover = handleMouseOver;
+                    classname[i].onmouseout = handleMouseOut;
+                }
+                first_id = obj.first_id;
+                last_id = obj.last_id;
+                prev_id = obj.prev_id;
+                next_id = obj.next_id;
+                $$("c_line_id").setValue(first_id);
+            } else {
+                var body = '';
+                obj.out.forEach(function(item, i, arr) {
+                    var line = item.replace(/</g, '&lt;').replace(/(\s+)$/, '');
+                    body += '<tr><td class="c_line_number" align="left">'
+                         + '<pre class="line_number">' + line + '</pre>'
+                         + '</td></tr>';
+                });
+                document.getElementById("table_c").innerHTML = body;
+            }
+        }
+        function set_break(id) {
+            var file = $$("select_file_id").getSelectedItem().file;          
+            var arg = file + ':' + id;
+            quiet_out_mode = true;
+            resp = command({cmd:'break', point:arg});
+            read_breaks();
+        }
+        function was_error(resp) {
+            var index;
+            for (index = 0; index < resp.length; ++index) {
+                if (resp[index].hasOwnProperty("err")) return 1;
+            }
+            return 0;
+        }
+        function command(values) {
+            var respond = [];
+            webix.ajax().sync().get(
+                "http://127.0.0.1:8080",
+                values,
+                {
+                    error:function(text, data){
+                        webix.message({type:"error", text:"Network problems."});
+                    },
+                    success:function(text, data){
+                        var obj = data.json();
+                        if(obj.hasOwnProperty('respond')) {
+                            obj.respond.forEach(function(entry){
+                                var resp = entry.resp;
+                                if(typeof(resp) === 'undefined') return;
+                                if(resp.hasOwnProperty("out")) {
+                                    if(!quiet_out_mode) webix.message(resp.out.join(''));
+                                }
+                                if(resp.hasOwnProperty("err")) {
+                                    if(!quiet_err_mode) webix.message({type:"error", text:resp.err.join('')});
+                                }
+                                respond.push(resp);
+                            });
+                        }
+                        quiet_out_mode = false;
+                        quiet_err_mode = false;
+                    }
+                }
+            );
+            return respond;
+        }            
+        </script>
+    </body>
+</html>
